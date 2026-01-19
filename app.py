@@ -376,7 +376,7 @@ if check_password():
             fig_master.add_trace(go.Scatter(x=final_res['df'].index, y=final_res['df']['MA20'], line=dict(color='#ffffff', width=1.5, dash='dot'), name='生命線 (MA20)'), row=1, col=1)
             
             # 蝴蝶 XABCD             if len(final_res['pts_x']) >= 4:
-                fig_master.add_trace(go.Scatter(x=final_res['pts_x'], y=final_res['pts_y'], mode='lines+markers+text', name='蝴蝶形態', line=dict(color='#00ffcc', width=3.5), text=['X','A','B','C','D'], textposition="top center"), row=1, col=1)
+            fig_master.add_trace(go.Scatter(x=final_res['pts_x'], y=final_res['pts_y'], mode='lines+markers+text', name='蝴蝶形態', line=dict(color='#00ffcc', width=3.5), text=['X','A','B','C','D'], textposition="top center"), row=1, col=1)
             
             fig_master.add_hline(y=final_res['fib_buy'], line_dash="dash", line_color="#ffa500", annotation_text="0.618 支撐")
             fig_master.add_hline(y=final_res['fib_target'], line_dash="dash", line_color="#00ff00", annotation_text="1.272 目標")
