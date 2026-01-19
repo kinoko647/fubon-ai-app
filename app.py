@@ -387,7 +387,7 @@ if check_password():
             fig_master_terminal.add_trace(go.Scatter(x=final_res['df'].index, y=final_res['df']['MA20'], line=dict(color='#ffffff', width=1.5, dash='dot'), name='生命線 (MA20)'), row=1, col=1)
             
             # 蝴蝶 XABCD 形態連線             if len(final_res['pts_x']) >= 4:
-                fig_master_terminal.add_trace(go.Scatter(
+            fig_master_terminal.add_trace(go.Scatter(
                     x=final_res['pts_x'], y=final_res['pts_y'], 
                     mode='lines+markers+text', 
                     name='形態連線', 
