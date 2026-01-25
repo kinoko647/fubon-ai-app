@@ -190,7 +190,7 @@ if check_password():
             fig.add_trace(go.Candlestick(x=f_res['df'].index, open=f_res['df']['Open'], high=f_res['df']['High'], low=f_res['df']['Low'], close=f_res['df']['Close'], name='K線'), row=1, col=1)
             
             # 蝴蝶形態連線             if len(f_res['pts_x']) >= 4:
-                fig.add_trace(go.Scatter(x=f_res['pts_x'], y=f_res['pts_y'], mode='markers+lines+text', name='蝴蝶 XABCD', line=dict(color='#00ffcc', width=3.5), text=['X','A','B','C','D'], textposition='top center'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=f_res['pts_x'], y=f_res['pts_y'], mode='markers+lines+text', name='蝴蝶 XABCD', line=dict(color='#00ffcc', width=3.5), text=['X','A','B','C','D'], textposition='top center'), row=1, col=1)
             
             # 雙軌買點標記             fig.add_trace(go.Scatter(x=[f_res['df'].index[-1]], y=[f_res['fib_buy']], mode='markers+text', name='左軌', marker=dict(symbol='triangle-up', size=20, color='#ffa500'), text=['左軌'], textposition='bottom center'), row=1, col=1)
             if f_res['breakout']:
