@@ -93,7 +93,7 @@ if check_password():
         pattern_label, ai_score, diag = "趨勢形成中", 60, []
         
         # 蝴蝶形態與縮進修復         if len(pts_idx) >= 4:
-            v_v = [df['Close'].iloc[i] for i in pts_idx[-4:]]
+        v_v = [df['Close'].iloc[i] for i in pts_idx[-4:]]
             if v_v[0] > v_v[1] and v_v[2] > v_v[1] and v_v[2] > v_v[3] and v_v[2] <= v_v[0]*1.015: 
                 pattern_label, ai_score = "蝴蝶 M 頭 (賣壓警示)", ai_score-20
                 diag.append("🔴 左側診斷：蝴蝶 D 點遭遇壓力，暫避高點。")
