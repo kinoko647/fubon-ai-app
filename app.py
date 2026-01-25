@@ -205,7 +205,7 @@ if check_password():
             #             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6, 0.15, 0.25], vertical_spacing=0.03, subplot_titles=("K線、蝴蝶連線與雙軌買點 (物理對焦版)", "RSI 強弱指標", "MACD 趨勢動能"))
             fig.add_trace(go.Candlestick(x=f_res['df'].index, open=f_res['df']['Open'], high=f_res['df']['High'], low=f_res['df']['Low'], close=f_res['df']['Close'], name='K線'), row=1, col=1)
             # 蝴蝶連線             if len(f_res['pts_x']) >= 4:
-                fig.add_trace(go.Scatter(x=f_res['pts_x'], y=f_res['pts_y'], mode='markers+lines+text', name='蝴蝶 XABCD', line=dict(color='#00ffcc', width=3.5), text=['X','A','B','C','D'], textposition='top center'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=f_res['pts_x'], y=f_res['pts_y'], mode='markers+lines+text', name='蝴蝶 XABCD', line=dict(color='#00ffcc', width=3.5), text=['X','A','B','C','D'], textposition='top center'), row=1, col=1)
             # 雙軌買點             fig.add_trace(go.Scatter(x=[f_res['df'].index[-1]], y=[f_res['fib_buy']], mode='markers+text', name='左軌抄底', marker=dict(symbol='triangle-up', size=20, color='#ffa500'), text=['左軌'], textposition='bottom center'), row=1, col=1)
             if f_res['breakout']:
                 fig.add_trace(go.Scatter(x=[f_res['df'].index[-1]], y=[f_res['curr']], mode='markers+text', name='右軌突破', marker=dict(symbol='star', size=25, color='#ff00ff'), text=['右軌'], textposition='top center'), row=1, col=1)
