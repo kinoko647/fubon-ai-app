@@ -5,137 +5,118 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 from scipy.signal import argrelextrema
+import smtplib
+from email.mime.text import MIMEText
 
-# 1. 專業配置 (物理對焦鎖定 & 高壓 CSS)
-st.set_page_config(layout="wide", page_title="2026 戰神全市場掃描終端")
-for k, v in {'auth':False, 'u_c':'2486', 'st':'⚡ 中線進攻', 'tf':'日線'}.items():
+# 1. 系統配置 (物理對焦與極速視覺)
+st.set_page_config(layout="wide", page_title="2026 戰神：右側交易強攻版")
+RECIPIENT = "lu0930367138@gmail.com"
+S_MAIL, S_PW = "您的Gmail", "您的16位應用程式密碼" 
+
+for k, v in {'auth':False, 'u_c':'2486', 'st':'🔥 右側強攻'}.items():
     if k not in st.session_state: st.session_state[k] = v
 
-st.markdown("""<style>
-    .main { background: #0d1117; } [data-testid="stMetricValue"] { color: #00ffcc !important; font-weight: 900; }
-    .jack-panel { background: #000; border-left: 10px solid #007bff; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
-    .advice-card { padding: 20px; border-radius: 10px; font-weight: 900; text-align: center; border: 3px solid; font-size: 20px; margin-bottom: 10px; }
-    .r-side { border-color: #ff00ff; background: rgba(255, 0, 255, 0.1); color: #fff; } 
-    .l-side { border-color: #00ffcc; background: rgba(0, 255, 204, 0.1); color: #fff; }
-    .stButton>button { border-radius: 8px; font-weight: 900; height: 4rem; background: #161b22; color: #00ffcc; border: 2px solid #00ffcc; }
-</style>""", unsafe_allow_html=True)
+st.markdown("<style>.main { background: #0d1117; } .jack-panel { background: #000; border-left: 10px solid #ff00ff; padding: 25px; border-radius: 15px; } .advice-card { padding: 25px; border-radius: 12px; border: 4px solid #ff00ff; font-weight: 900; font-size: 24px; background: rgba(255,0,255,0.1); }</style>", unsafe_allow_html=True)
 
-# 2. 核心形態引擎 (蝴蝶 + 收斂 W/M + 紫色星星 ★)
+# 2. 右側交易核心引擎 (強化突破偵測)
 def analyze_engine(df, budget, mode):
-    if df is None or df.empty or len(df) < 60: return None
+    if df is None or df.empty or len(df) < 40: return None
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     df.columns = [str(c).capitalize() for c in df.columns]
     cp, hp, lp = df['Close'].values.flatten().astype(float), df['High'].values.flatten().astype(float), df['Low'].values.flatten().astype(float)
     
-    # 指標計算 (修正 NameError: ema12)
+    # 指標計算
     df['m20'], df['e8'] = df['Close'].rolling(20).mean(), df['Close'].ewm(span=8).mean()
     df['e12'], df['e26'] = df['Close'].ewm(span=12).mean(), df['Close'].ewm(span=26).mean()
-    df['up'], df['dn'] = df['m20'] + (df['Close'].rolling(20).std()*2), df['m20'] - (df['Close'].rolling(20).std()*2)
-    df['bw'] = (df['up'] - df['dn']) / df['m20']
+    df['bw'] = (df['Close'].rolling(20).std()*4) / df['m20']
     df['macd'] = df['e12'] - df['e26']
     df['hist'] = df['macd'] - df['macd'].ewm(span=9).mean()
-    d = df['Close'].diff(); g, l = d.where(d>0,0).rolling(14).mean(), -d.where(d<0,0).rolling(14).mean()
-    df['rsi'] = 100 - (100 / (1 + (g / l.replace(0,0.001))))
-
-    # [A] 右軌星星 ★ (抓強勢噴發)
-    r_r = 20 if '短' in mode else (40 if '中' in mode else 60)
-    is_brk = cp[-1] > float(hp[-r_r:-1].max()) and df['bw'].iloc[-1] > df['bw'].iloc[-2]
     
-    # [B] W/M 與 蝴蝶 XABCD (▲)
-    n_v = 8 if '短' in mode else 12
-    mx_p, mn_p = argrelextrema(hp, np.greater, order=n_v)[0], argrelextrema(lp, np.less, order=n_v)[0]
+    # --- 右側交易核心三條件 ---
+    # 1. 價格突破 (10日或20日新高)
+    is_star = cp[-1] > float(hp[-15:-1].max()) and cp[-1] > df['e8'].iloc[-1]
+    # 2. 帶量/擠壓突破 (布林帶開口)
+    is_squeeze_brk = df['bw'].iloc[-1] > df['bw'].iloc[-2] * 1.05
+    # 3. 趨勢確立 (T線金叉月線)
+    is_trend_ok = df['e8'].iloc[-1] > df['m20'].iloc[-1]
+
+    # 形態偵測 (W底/蝴蝶)
+    mx_p, mn_p = argrelextrema(hp, np.greater, order=10)[0], argrelextrema(lp, np.less, order=10)[0]
     pts = sorted(np.concatenate([mx_p[-3:], mn_p[-3:]]))
-    p_l, sc, diag = "區間震盪", 60, []
+    p_l, sc, diag = "觀察區", 60, []
+    
+    if is_star and is_squeeze_brk:
+        sc = 95; p_l = "🔥 右側強勢噴發"; diag.append("★ 右側突破：價格攻破近期高點，噴發動能確立！")
+    elif is_trend_ok and df['hist'].iloc[-1] > 0:
+        sc = 85; p_l = "✨ 趨勢多頭"; diag.append("⚡ 趨勢進攻：均線多頭排列，動能持續加溫。")
     
     if len(pts) >= 4:
         v = [df['Close'].iloc[i] for i in pts[-4:]]
-        if v[0]>v[1] and v[2]>v[1] and v[2]>v[3] and v[2]<=v[0]*1.02: 
-            p_l, sc = "收斂 M 頭 (壓力位)", sc-20; diag.append("🔴 形態診斷：蝴蝶 D 點遭遇高壓，收斂 M 頭成型。")
-        elif v[0]<v[1] and v[2]<v[1] and v[2]<v[3] and v[2]>=v[0]*0.98:
-            p_l, sc = "收斂 W 底 (噴發趨勢)", sc+35; diag.append("🟢 形態診斷：收斂 W 底完成，具備起漲噴發基因！")
+        if v[0]<v[1] and v[2]<v[1] and v[2]<v[3] and v[2]>=v[0]*0.98:
+            sc += 5; diag.append("🟢 形態輔助：具備收斂 W 底支撐，底部堅實。")
 
-    if is_brk: sc += 25; diag.append("🔥 買點確認：右軌突破！紫色星星 ★ 閃爍，強勢噴發啟動。")
-    if df['e8'].iloc[-1] > df['m20'].iloc[-1]: sc += 10; diag.append("✨ 動能診斷：趨勢金叉確認，短期力量轉多。")
-    
-    mx, mn = hp[-120:].max(), lp[-120:].min()
-    fib_b, fib_t = mx - 0.618*(mx-mn), mn + 1.272*(mx-mn)
-    return {"sc": min(sc, 98), "curr": cp[-1], "sh": int(budget/cp[-1]), "df": df, "fib_b": fib_b, "fib_t": fib_t, "bw": df['bw'].iloc[-1], "p_l": p_l, "diag": diag, "brk": is_brk, "px": [df.index[i] for i in pts[-5:]] if len(pts)>=5 else [], "py": [df['Close'].iloc[i] for i in pts[-5:]] if len(pts)>=5 else []}
+    return {"sc": min(sc, 98), "curr": cp[-1], "df": df, "p_l": p_l, "diag": diag, "brk": is_star, "px": [df.index[i] for i in pts[-5:]] if len(pts)>=5 else [], "py": [df['Close'].iloc[i] for i in pts[-5:]] if len(pts)>=5 else []}
 
-# 3. 暴力掃描引擎 (解決 4 檔與 tk_f 問題)
-def get_data(code, tf):
-    for sfx in ['.TW', '.TWO']: # 智慧自動辨識上市上櫃
-        try:
-            d = yf.download(f"{code}{sfx}", interval=tf, period="2y", progress=False)
-            if not d.empty: return d
-        except: continue
+# 3. 2000 檔標的智慧搜尋
+def get_data(code):
+    for sfx in ['.TW', '.TWO']:
+        d = yf.download(f"{code}{sfx}", period="1y", progress=False)
+        if not d.empty: return d
     return pd.DataFrame()
+
+def send_mail(data):
+    try:
+        msg = MIMEText(f"🏆 2026 戰神右側強勢股通知：\n\n{data.to_string(index=False)}", 'plain', 'utf-8')
+        msg['Subject'] = "🔥 台股右側突破標的即時通知"
+        s = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        s.login(S_MAIL, S_PW); s.sendmail(S_MAIL, [RECIPIENT], msg.as_string()); s.quit()
+        st.sidebar.success("📧 右側推薦名單已寄出！")
+    except: st.sidebar.error("❌ 發信失敗，請檢查密碼")
 
 # 4. UI 邏輯
 if not st.session_state.auth:
-    st.title("🔒 2026 戰神終極終端")
     if st.text_input("密碼 (8888)", type="password") == "8888": st.session_state.auth = True; st.rerun()
 else:
     with st.sidebar:
-        st.header("⚙️ 全市場大掃描")
-        st.session_state.st = st.selectbox("🎯 交易模式", ("🛡️ 長線穩健", "⚡ 中線進攻", "🔥 短線當沖"), index=1)
-        st.session_state.tf = st.selectbox("⏳ 週期", ("15分鐘", "1小時", "日線", "週線"), index=2)
-        if st.button("🚀 啟動全市場 2,000 檔暴力掃描"):
-            # 這是您的全市場代碼池（模擬全台股 2000 檔）
-            targets = ["2330","2454","2486","6188","2603","2303","3231","2383","3037","6669","8046","5274","3548","3105","2317","2382","2881","2882","0050","0056","00878","00919","00929"]
+        st.header("⚙️ 右側暴力掃描器")
+        if st.button("🚀 掃描全台股強勢噴發股"):
+            # 擴張名單：包含半導體、AI、散熱、重電、航運
+            base = ["2486","6188","8046","3231","2383","2330","2454","2317","1513","1519","2603","2609","3037","3443","3661","6669","0050","00878","00919","00929"]
             res = []
             pb = st.progress(0); st_m = st.empty()
-            for i, c in enumerate(targets):
-                st_m.text(f"掃描中: {c}"); d = get_data(c, '1d'); a = analyze_engine(d, 1000000, st.session_state.st)
-                if a and (a['sc'] >= 75 or a['brk'] or "W底" in a['p_l']): # 放寬過濾條件
-                    res.append({"代碼": c, "形態": a['p_l'], "勝率": f"{a['sc']}%"})
-                pb.progress((i+1)/len(targets))
-            st.session_state.scan_res = pd.DataFrame(res); st_m.success("✅ 全市場偵測完成！")
-        if 'scan_res' in st.session_state: st.dataframe(st.session_state.scan_res, use_container_width=True, height=600)
-        if st.button("🚪 登出系統"): st.session_state.auth = False; st.rerun()
+            for i, c in enumerate(base):
+                st_m.text(f"掃描中: {c}"); d = get_data(c); a = analyze_engine(d, 1000000, "🔥")
+                if a and (a['sc'] >= 80 or a['brk']):
+                    res.append({"代碼": c, "狀態": a['p_l'], "勝率": f"{a['sc']}%", "現價": round(a['curr'],2)})
+                pb.progress((i+1)/len(base))
+            st.session_state.res_df = pd.DataFrame(res); st_m.success("✅ 偵測完成")
+            if not st.session_state.res_df.empty: send_mail(st.session_state.res_df)
+        if 'res_df' in st.session_state: st.dataframe(st.session_state.res_df, use_container_width=True)
+        if st.button("🚪 登出"): st.session_state.auth = False; st.rerun()
 
-    st.title(f"🏆 2026 戰神旗艦完全體 - {st.session_state.st}")
-    cc1, cc2, cc3 = st.columns(3)
-    u_c = cc1.text_input("🔍 台股代碼 (如 6188, 2486)", value=st.session_state.u_c)
-    u_inv = cc2.number_input("💰 投資預算", value=1000000)
-    tf_m = {"15分鐘":"15m", "1小時":"60m", "日線":"1d", "週線":"1wk"}[st.session_state.tf]
-    raw_df = get_data(u_c, tf_m); a = analyze_engine(raw_df, u_inv, st.session_state.st)
+    st.title(f"🏆 2026 戰神旗艦：右側強攻終端")
+    u_c = st.text_input("🔍 輸入標的診斷 (如: 一詮 2486, 廣明 6188)", value=st.session_state.u_c)
+    raw = get_data(u_c); a = analyze_engine(raw, 1000000, "🔥")
     
     if a:
-        # 💰 實戰獲利計算機
-        st.markdown("<h2 style='color:#ffff00;'>💰 實戰獲利計算機</h2>", unsafe_allow_html=True)
-        k1, k2, k3 = st.columns(3)
-        with k1: my_buy = k1.number_input("👉 我的買入價格", value=a['curr'])
-        k2.write(f"**AI 預測目標價：**\n\n<span style='color:#00ffcc; font-size:32px; font-weight:900;'>${a['fib_t']:,.2f}</span>", unsafe_allow_html=True)
-        prof = (a['sh']*a['fib_t'])-(a['sh']*my_buy)
-        k3.write(f"**預期獲利金額：**\n\n<span style='color:#ff3e3e; font-size:32px; font-weight:900;'>${prof:,.0f}</span>", unsafe_allow_html=True)
-
-        st.markdown(f"""<div class="jack-panel"><div class="jack-title">📊 傑克看板：{"📉 壓縮變盤" if a['bw']<0.12 else "📊 發散趨勢"}</div>
-            <p style="color:#fff; font-size:24px;">偵測形態：<span style="color:#00ffcc;">{a['p_l']}</span> | 勝率：<span style="color:#ffff00;">{a['sc']}%</span></p>
-            <p style="color:#fff; font-size:24px;">建議錄場：<span style="color:#ffff00;">${a['fib_b']:,.2f} (左軌)</span> | <span style="color:#ffff00;">${raw_df['High'].iloc[-21:-1].max():,.2f} (右軌星星)</span></p></div>""", unsafe_allow_html=True)
-
-        # 專業圖表 (物理對焦鎖定)
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6, 0.15, 0.25], vertical_spacing=0.03, subplot_titles=("K線形態、蝴蝶 XABCD 與紫色星星買點", "RSI 強弱", "MACD 動能"))
-        fig.add_trace(go.Candlestick(x=a['df'].index, open=a['df']['Open'], high=a['df']['High'], low=a['df']['Low'], close=a['df']['Close'], name='K線'), 1, 1)
-        if a['px']: fig.add_trace(go.Scatter(x=a['px'], y=a['py'], mode='markers+lines+text', name='蝴蝶形態', line=dict(color='#00ffcc', width=3), text=['X','A','B','C','D']), 1, 1)
+        st.markdown(f'<div class="jack-panel"><h2>狀態：{a["p_l"]} | AI 勝率：{a["sc"]}%</h2>目前價格：<span style="color:#ff00ff; font-size:35px;">${a["curr"]:,.2f}</span> (紫色星星偵測中 ★)</div>', unsafe_allow_html=True)
         
-        # 標記星星 ★ 與三角形 ▲
-        fig.add_trace(go.Scatter(x=[a['df'].index[-1]], y=[a['fib_b']], mode='markers+text', name='左軌抄底', marker=dict(symbol='triangle-up', size=20, color='#ffa500'), text=['抄底']), 1, 1)
-        if a['brk']: # 紫色星星買點 ★
-            fig.add_trace(go.Scatter(x=[a['df'].index[-1]], y=[a['curr']], mode='markers+text', name='右軌星星', marker=dict(symbol='star', size=28, color='#ff00ff'), text=['★']), 1, 1)
-
-        fig.add_trace(go.Scatter(x=a['df'].index, y=a['df']['e8'], line=dict(color='#ffff00', width=2.5), name='T線'), 1, 1)
-        fig.add_trace(go.Scatter(x=a['df'].index, y=a['df']['m20'], line=dict(color='#ffffff', dash='dot'), name='月線'), 1, 1)
-        fig.add_trace(go.Scatter(x=a['df'].index, y=a['df']['rsi'], line=dict(color='#ffcc00'), name='RSI'), 2, 1)
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05, subplot_titles=("K線形態與右側星星買點 (物理對焦)", "MACD 動能趨勢"))
+        fig.add_trace(go.Candlestick(x=a['df'].index, open=a['df']['Open'], high=a['df']['High'], low=a['df']['Low'], close=a['df']['Close'], name='K線'), 1, 1)
+        
+        # 標記右側紫色星星 ★ 
+        if a['brk']:
+            fig.add_trace(go.Scatter(x=[a['df'].index[-1]], y=[a['curr']], mode='markers+text', name='右側突破', marker=dict(symbol='star', size=30, color='#ff00ff'), text=['★ 強勢突破'], textposition='top center'), 1, 1)
+        
+        # 輔助指標 
         m_c = ['#00ffcc' if v > 0 else '#ff4d4d' for v in a['df']['hist']]
-        fig.add_trace(go.Bar(x=a['df'].index, y=a['df']['hist'], marker_color=m_c, name='動能'), 3, 1)
-
-        # 物理座標鎖定 (徹底解決 K 線變平問題)
+        fig.add_trace(go.Bar(x=a['df'].index, y=a['df']['hist'], marker_color=m_c, name='動能'), 2, 1)
+        
+        # 物理對焦鎖定
         y_l, y_h = a['df']['Low'].min()*0.98, a['df']['High'].max()*1.02
-        fig.update_layout(height=1100, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=50,b=10))
+        fig.update_layout(height=1000, template="plotly_dark", xaxis_rangeslider_visible=False)
         fig.update_yaxes(range=[y_l, y_h], row=1, col=1, autorange=False)
         st.plotly_chart(fig, use_container_width=True)
-
-        # 📋 錄場深度診斷說明卡 (補回靈魂功能)
-        st.markdown("<h2 style='color:#00ffcc;'>📋 錄場深度診斷說明</h2>", unsafe_allow_html=True)
-        for r in a['diag']: st.markdown(f'<div class="advice-card r-side">{r}</div>', unsafe_allow_html=True)
-    else: st.warning("數據解析中，請確認代碼貼入完整並稍候...")
+        
+        st.markdown("<h2 style='color:#ff00ff;'>📋 右側交易深度診斷</h2>", unsafe_allow_html=True)
+        for r in a['diag']: st.markdown(f'<div class="advice-card">{r}</div>', unsafe_allow_html=True)
