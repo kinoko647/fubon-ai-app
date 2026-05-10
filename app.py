@@ -9,10 +9,10 @@ import warnings
 warnings.filterwarnings("ignore")
 
 st.set_page_config(
-page_title=“左側交易分析儀”,
-page_icon=“🦋”,
-layout=“wide”,
-initial_sidebar_state=“expanded”
+page_title="左側交易分析儀",
+page_icon="🦋",
+layout="wide",
+initial_sidebar_state="expanded"
 )
 
 st.markdown(”””
