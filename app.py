@@ -1,8 +1,8 @@
-“””
+"""
 左側交易分析儀 - Streamlit + Plotly 版
 支援：BTC / 加密貨幣 / 台股 / 美股
 功能：蝴蝶形態、W/M形態、發散/收斂、交易量分析
-“””
+"""
 
 import streamlit as st
 import yfinance as yf
