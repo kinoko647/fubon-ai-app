@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.signal import argrelextrema
 import warnings
-warnings.filterwarnings(“ignore“)
+warnings.filterwarnings("ignore")
 
 st.set_page_config(
 page_title=“左側交易分析儀”,
