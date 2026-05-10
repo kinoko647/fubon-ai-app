@@ -1,654 +1,610 @@
+“””
+左側交易分析儀 - Streamlit + Plotly 版
+支援：BTC / 加密貨幣 / 台股 / 美股
+功能：蝴蝶形態、W/M形態、發散/收斂、交易量分析
+“””
+
+import streamlit as st
 import yfinance as yf
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.gridspec import GridSpec
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from scipy.signal import argrelextrema
-from datetime import datetime, timedelta
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings(‘ignore’)
 
 # ─────────────────────────────────────────────────────────────
-# 字體與顏色設定
-# ─────────────────────────────────────────────────────────────
-plt.rcParams['font.family'] = ['Microsoft JhengHei', 'PingFang TC', 'DejaVu Sans']
-plt.rcParams['axes.facecolor'] = '#0d1117'
-plt.rcParams['figure.facecolor'] = '#0d1117'
-plt.rcParams['text.color'] = '#e6edf3'
-plt.rcParams['axes.labelcolor'] = '#8b949e'
-plt.rcParams['xtick.color'] = '#8b949e'
-plt.rcParams['ytick.color'] = '#8b949e'
-plt.rcParams['axes.edgecolor'] = '#30363d'
-plt.rcParams['grid.color'] = '#21262d'
 
-BULL_COLOR = '#3fb950'   # 做多綠
-BEAR_COLOR = '#f85149'   # 做空紅
-NEUTRAL_COLOR = '#58a6ff' # 中性藍
-WARNING_COLOR = '#d29922' # 警告黃
-
+# 頁面設定
 
 # ─────────────────────────────────────────────────────────────
-# 1. 資料獲取
-# ─────────────────────────────────────────────────────────────
-def get_data(symbol: str, period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
-    """
-    下載行情資料
-    symbol: 'BTC-USD' 或 股票代碼如 '2330.TW' / 'AAPL'
-    period: 1mo, 3mo, 6mo, 1y, 2y
-    interval: 1d, 1h, 4h (注意yfinance對4h不支援，請用1h)
-    """
-    print(f"\n📡 正在下載 {symbol} 資料 (週期:{period}, 間隔:{interval})...")
-    df = yf.download(symbol, period=period, interval=interval, progress=False)
-    if df.empty:
-        raise ValueError(f"❌ 無法取得 {symbol} 資料，請確認代碼是否正確")
-    
-    # 統一欄位名稱（yfinance v0.2+ 可能是 MultiIndex）
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    
-    df.dropna(inplace=True)
-    print(f"✅ 取得 {len(df)} 筆資料 ({df.index[0].date()} ~ {df.index[-1].date()})")
-    return df
 
+st.set_page_config(
+page_title=“左側交易分析儀”,
+page_icon=“🦋”,
+layout=“wide”,
+initial_sidebar_state=“expanded”
+)
+
+st.markdown(”””
+
+<style>
+    .main { background-color: #0d1117; }
+    .stApp { background-color: #0d1117; color: #e6edf3; }
+    .block-container { padding-top: 1rem; }
+    .signal-bull { background: #1a3a2a; border-left: 4px solid #3fb950;
+                   padding: 10px 14px; border-radius: 6px; margin: 6px 0; }
+    .signal-bear { background: #3a1a1a; border-left: 4px solid #f85149;
+                   padding: 10px 14px; border-radius: 6px; margin: 6px 0; }
+    .signal-warn { background: #2e2a14; border-left: 4px solid #d29922;
+                   padding: 10px 14px; border-radius: 6px; margin: 6px 0; }
+    .signal-info { background: #162032; border-left: 4px solid #58a6ff;
+                   padding: 10px 14px; border-radius: 6px; margin: 6px 0; }
+    h1, h2, h3 { color: #e6edf3 !important; }
+    .stSelectbox label, .stTextInput label, .stSlider label { color: #8b949e !important; }
+</style>
+
+“””, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
-# 2. 極值點偵測（高低點）
+
+# 快捷代碼列表
+
 # ─────────────────────────────────────────────────────────────
+
+QUICK_SYMBOLS = {
+“🪙 BTC”: “BTC-USD”,
+“🔷 ETH”: “ETH-USD”,
+“🟡 BNB”: “BNB-USD”,
+“🔵 SOL”: “SOL-USD”,
+“🟠 XRP”: “XRP-USD”,
+“📱 台積電”: “2330.TW”,
+“🏦 富邦金”: “2881.TW”,
+“📊 台灣50”: “0050.TW”,
+“🍎 Apple”: “AAPL”,
+“🚗 Tesla”: “TSLA”,
+“🔍 Google”: “GOOGL”,
+“📦 Amazon”: “AMZN”,
+“💻 Nvidia”: “NVDA”,
+“📈 SPY”: “SPY”,
+}
+
+# ─────────────────────────────────────────────────────────────
+
+# 資料獲取
+
+# ─────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=300)
+def get_data(symbol: str, period: str, interval: str) -> pd.DataFrame:
+df = yf.download(symbol, period=period, interval=interval, progress=False)
+if df.empty:
+return pd.DataFrame()
+if isinstance(df.columns, pd.MultiIndex):
+df.columns = df.columns.get_level_values(0)
+df.dropna(inplace=True)
+return df
+
+# ─────────────────────────────────────────────────────────────
+
+# 極值偵測
+
+# ─────────────────────────────────────────────────────────────
+
 def find_pivots(series: pd.Series, order: int = 5):
-    """尋找局部高點與低點，order 為左右比較的K棒數"""
-    highs = argrelextrema(series.values, np.greater, order=order)[0]
-    lows = argrelextrema(series.values, np.less, order=order)[0]
-    return highs, lows
-
+highs = argrelextrema(series.values, np.greater, order=order)[0]
+lows = argrelextrema(series.values, np.less, order=order)[0]
+return highs, lows
 
 # ─────────────────────────────────────────────────────────────
-# 3. 蝴蝶形態偵測 (Butterfly Pattern)
+
+# 蝴蝶形態
+
 # ─────────────────────────────────────────────────────────────
+
 def detect_butterfly(df: pd.DataFrame, order: int = 5):
-    """
-    蝴蝶形態規則 (Gartley/Butterfly 變體)：
-    看漲蝴蝶：X低 → A高 → B低 → C高 → D低 (D < X)
-    看跌蝴蝶：X高 → A低 → B高 → C低 → D高 (D > X)
-    
-    Fibonacci 比例：
-    AB = 0.786 * XA
-    BC = 0.382 ~ 0.886 * AB
-    CD = 1.618 ~ 2.618 * BC
-    """
-    close = df['Close']
-    highs_idx, lows_idx = find_pivots(close, order=order)
-    
-    results = []
-    
-    # 看漲蝴蝶：找 低-高-低-高-低 結構
-    all_pivots = []
-    for i in lows_idx:
-        all_pivots.append((i, 'low', close.iloc[i]))
-    for i in highs_idx:
-        all_pivots.append((i, 'high', close.iloc[i]))
-    all_pivots.sort(key=lambda x: x[0])
-    
-    for i in range(len(all_pivots) - 4):
-        p = all_pivots[i:i+5]
-        types = [x[1] for x in p]
-        
-        # 看漲：low-high-low-high-low
-        if types == ['low', 'high', 'low', 'high', 'low']:
-            X, A, B, C, D = [x[2] for x in p]
-            XA = A - X
-            AB = A - B
-            BC = C - B
-            CD = C - D
-            
-            if XA > 0 and AB > 0 and BC > 0 and CD > 0:
-                ratio_AB_XA = AB / XA
-                ratio_BC_AB = BC / AB
-                ratio_CD_BC = CD / BC
-                
-                if (0.70 <= ratio_AB_XA <= 0.90 and
-                    0.30 <= ratio_BC_AB <= 0.95 and
-                    1.40 <= ratio_CD_BC <= 2.80 and
-                    D < X):  # 蝴蝶條件：D低於X
-                    
-                    results.append({
-                        'type': '看漲蝴蝶 🦋↑',
-                        'direction': 'bull',
-                        'points': [p[j][0] for j in range(5)],
-                        'prices': [p[j][2] for j in range(5)],
-                        'labels': ['X', 'A', 'B', 'C', 'D'],
-                        'entry': D,
-                        'stop_loss': D * 0.97,
-                        'target1': D + BC * 0.618,
-                        'target2': D + XA * 0.786,
-                        'ratios': {'AB/XA': ratio_AB_XA, 'BC/AB': ratio_BC_AB, 'CD/BC': ratio_CD_BC}
-                    })
-        
-        # 看跌：high-low-high-low-high
-        if types == ['high', 'low', 'high', 'low', 'high']:
-            X, A, B, C, D = [x[2] for x in p]
-            XA = X - A
-            AB = B - A
-            BC = B - C
-            CD = D - C
-            
-            if XA > 0 and AB > 0 and BC > 0 and CD > 0:
-                ratio_AB_XA = AB / XA
-                ratio_BC_AB = BC / AB
-                ratio_CD_BC = CD / BC
-                
-                if (0.70 <= ratio_AB_XA <= 0.90 and
-                    0.30 <= ratio_BC_AB <= 0.95 and
-                    1.40 <= ratio_CD_BC <= 2.80 and
-                    D > X):  # 蝴蝶條件：D高於X
-                    
-                    results.append({
-                        'type': '看跌蝴蝶 🦋↓',
-                        'direction': 'bear',
-                        'points': [p[j][0] for j in range(5)],
-                        'prices': [p[j][2] for j in range(5)],
-                        'labels': ['X', 'A', 'B', 'C', 'D'],
-                        'entry': D,
-                        'stop_loss': D * 1.03,
-                        'target1': D - BC * 0.618,
-                        'target2': D - XA * 0.786,
-                        'ratios': {'AB/XA': ratio_AB_XA, 'BC/AB': ratio_BC_AB, 'CD/BC': ratio_CD_BC}
-                    })
-    
-    return results
+close = df[‘Close’]
+highs_idx, lows_idx = find_pivots(close, order=order)
+results = []
 
+```
+all_pivots = []
+for i in lows_idx:
+    all_pivots.append((i, 'low', float(close.iloc[i])))
+for i in highs_idx:
+    all_pivots.append((i, 'high', float(close.iloc[i])))
+all_pivots.sort(key=lambda x: x[0])
+
+for i in range(len(all_pivots) - 4):
+    p = all_pivots[i:i+5]
+    types = [x[1] for x in p]
+
+    # 看漲蝴蝶
+    if types == ['low', 'high', 'low', 'high', 'low']:
+        X, A, B, C, D = [x[2] for x in p]
+        XA = A - X
+        AB = A - B
+        BC = C - B
+        CD = C - D
+        if XA > 0 and AB > 0 and BC > 0 and CD > 0:
+            r1, r2, r3 = AB/XA, BC/AB, CD/BC
+            if 0.70 <= r1 <= 0.90 and 0.30 <= r2 <= 0.95 and 1.40 <= r3 <= 2.80 and D < X:
+                results.append({
+                    'type': '看漲蝴蝶 🦋↑', 'direction': 'bull',
+                    'points': [p[j][0] for j in range(5)],
+                    'prices': [p[j][2] for j in range(5)],
+                    'labels': ['X', 'A', 'B', 'C', 'D'],
+                    'entry': D, 'stop_loss': D * 0.97,
+                    'target1': D + BC * 0.618, 'target2': D + XA * 0.786,
+                    'ratios': {'AB/XA': r1, 'BC/AB': r2, 'CD/BC': r3}
+                })
+
+    # 看跌蝴蝶
+    if types == ['high', 'low', 'high', 'low', 'high']:
+        X, A, B, C, D = [x[2] for x in p]
+        XA = X - A
+        AB = B - A
+        BC = B - C
+        CD = D - C
+        if XA > 0 and AB > 0 and BC > 0 and CD > 0:
+            r1, r2, r3 = AB/XA, BC/AB, CD/BC
+            if 0.70 <= r1 <= 0.90 and 0.30 <= r2 <= 0.95 and 1.40 <= r3 <= 2.80 and D > X:
+                results.append({
+                    'type': '看跌蝴蝶 🦋↓', 'direction': 'bear',
+                    'points': [p[j][0] for j in range(5)],
+                    'prices': [p[j][2] for j in range(5)],
+                    'labels': ['X', 'A', 'B', 'C', 'D'],
+                    'entry': D, 'stop_loss': D * 1.03,
+                    'target1': D - BC * 0.618, 'target2': D - XA * 0.786,
+                    'ratios': {'AB/XA': r1, 'BC/AB': r2, 'CD/BC': r3}
+                })
+return results
+```
 
 # ─────────────────────────────────────────────────────────────
-# 4. W底/M頭形態偵測 + 發散/收斂
+
+# W底 / M頭
+
 # ─────────────────────────────────────────────────────────────
+
 def detect_wm_patterns(df: pd.DataFrame, order: int = 5):
-    """
-    W底（雙底）：兩個相近低點，中間有反彈高點
-    M頭（雙頂）：兩個相近高點，中間有回落低點
-    發散：兩個低點/高點距離越來越大 → 趨勢延伸
-    收斂：兩個低點/高點距離越來越小 → 趨勢反轉準備
-    """
-    close = df['Close']
-    volume = df['Volume']
-    highs_idx, lows_idx = find_pivots(close, order=order)
-    
-    results = []
-    
-    # ── W底偵測 ──
-    for i in range(len(lows_idx) - 1):
-        idx1, idx2 = lows_idx[i], lows_idx[i+1]
-        p1, p2 = close.iloc[idx1], close.iloc[idx2]
-        
-        # 兩低點之間找最高點（頸線）
-        between = close.iloc[idx1:idx2+1]
-        neck_idx = between.idxmax()
-        neck_price = between.max()
-        
-        # W底條件：兩低點相近（差距 < 5%），頸線明顯高於低點
-        price_diff = abs(p1 - p2) / max(p1, p2)
-        neck_height = (neck_price - min(p1, p2)) / min(p1, p2)
-        
-        if price_diff < 0.05 and neck_height > 0.03:
-            # 判斷收斂/發散
-            vol1 = volume.iloc[idx1]
-            vol2 = volume.iloc[idx2]
-            
-            if p2 < p1:  # 第二低點更低 → 發散（假突破警惕）
-                pattern_sub = '發散W底（假突破風險⚠️）'
-                divergence = 'diverge'
-            elif p2 > p1:  # 第二低點更高 → 收斂（底部確認）
-                pattern_sub = '收斂W底（底部確認✅）'
-                divergence = 'converge'
-            else:
-                pattern_sub = '標準W底'
-                divergence = 'equal'
-            
-            # 量能確認：第二低點成交量應小於第一低點（縮量）
-            vol_confirm = '✅量縮確認' if vol2 < vol1 else '⚠️量未縮'
-            
-            results.append({
-                'type': f'W底 {pattern_sub}',
-                'direction': 'bull',
-                'divergence': divergence,
-                'points': [idx1, idx2],
-                'prices': [p1, p2],
-                'neck': neck_price,
-                'entry': neck_price * 1.005,  # 突破頸線0.5%進場
-                'stop_loss': min(p1, p2) * 0.98,
-                'target': neck_price + (neck_price - min(p1, p2)),  # 等幅量度
-                'vol_confirm': vol_confirm,
-                'vol_ratio': round(vol2/vol1, 2)
-            })
-    
-    # ── M頭偵測 ──
-    for i in range(len(highs_idx) - 1):
-        idx1, idx2 = highs_idx[i], highs_idx[i+1]
-        p1, p2 = close.iloc[idx1], close.iloc[idx2]
-        
-        between = close.iloc[idx1:idx2+1]
-        neck_idx = between.idxmin()
-        neck_price = between.min()
-        
-        price_diff = abs(p1 - p2) / max(p1, p2)
-        neck_depth = (max(p1, p2) - neck_price) / max(p1, p2)
-        
-        if price_diff < 0.05 and neck_depth > 0.03:
-            vol1 = volume.iloc[idx1]
-            vol2 = volume.iloc[idx2]
-            
-            if p2 > p1:  # 第二高點更高 → 發散（持續上漲可能）
-                pattern_sub = '發散M頭（持續上漲⚠️）'
-                divergence = 'diverge'
-            elif p2 < p1:  # 第二高點更低 → 收斂（頭部確認）
-                pattern_sub = '收斂M頭（頭部確認✅）'
-                divergence = 'converge'
-            else:
-                pattern_sub = '標準M頭'
-                divergence = 'equal'
-            
-            vol_confirm = '✅量縮確認' if vol2 < vol1 else '⚠️量放大（謹慎）'
-            
-            results.append({
-                'type': f'M頭 {pattern_sub}',
-                'direction': 'bear',
-                'divergence': divergence,
-                'points': [idx1, idx2],
-                'prices': [p1, p2],
-                'neck': neck_price,
-                'entry': neck_price * 0.995,
-                'stop_loss': max(p1, p2) * 1.02,
-                'target': neck_price - (max(p1, p2) - neck_price),
-                'vol_confirm': vol_confirm,
-                'vol_ratio': round(vol2/vol1, 2)
-            })
-    
-    return results
+close = df[‘Close’]
+volume = df[‘Volume’]
+highs_idx, lows_idx = find_pivots(close, order=order)
+results = []
 
+```
+# W底
+for i in range(len(lows_idx) - 1):
+    idx1, idx2 = lows_idx[i], lows_idx[i+1]
+    p1, p2 = float(close.iloc[idx1]), float(close.iloc[idx2])
+    between = close.iloc[idx1:idx2+1]
+    neck = float(between.max())
+    price_diff = abs(p1 - p2) / max(p1, p2)
+    neck_height = (neck - min(p1, p2)) / min(p1, p2)
+    if price_diff < 0.06 and neck_height > 0.02:
+        v1, v2 = float(volume.iloc[idx1]), float(volume.iloc[idx2])
+        if p2 < p1:
+            sub, div = '發散W底 ⚠️', 'diverge'
+        elif p2 > p1:
+            sub, div = '收斂W底 ✅', 'converge'
+        else:
+            sub, div = '標準W底', 'equal'
+        vol_txt = '✅量縮確認' if v2 < v1 else '⚠️量未縮'
+        results.append({
+            'type': f'W底 {sub}', 'direction': 'bull', 'divergence': div,
+            'points': [idx1, idx2], 'prices': [p1, p2],
+            'neck': neck, 'entry': neck * 1.005,
+            'stop_loss': min(p1, p2) * 0.98,
+            'target': neck + (neck - min(p1, p2)),
+            'vol_confirm': vol_txt, 'vol_ratio': round(v2/v1, 2) if v1 > 0 else 0
+        })
+
+# M頭
+for i in range(len(highs_idx) - 1):
+    idx1, idx2 = highs_idx[i], highs_idx[i+1]
+    p1, p2 = float(close.iloc[idx1]), float(close.iloc[idx2])
+    between = close.iloc[idx1:idx2+1]
+    neck = float(between.min())
+    price_diff = abs(p1 - p2) / max(p1, p2)
+    neck_depth = (max(p1, p2) - neck) / max(p1, p2)
+    if price_diff < 0.06 and neck_depth > 0.02:
+        v1, v2 = float(volume.iloc[idx1]), float(volume.iloc[idx2])
+        if p2 > p1:
+            sub, div = '發散M頭 ⚠️', 'diverge'
+        elif p2 < p1:
+            sub, div = '收斂M頭 ✅', 'converge'
+        else:
+            sub, div = '標準M頭', 'equal'
+        vol_txt = '✅量縮確認' if v2 < v1 else '⚠️量放大'
+        results.append({
+            'type': f'M頭 {sub}', 'direction': 'bear', 'divergence': div,
+            'points': [idx1, idx2], 'prices': [p1, p2],
+            'neck': neck, 'entry': neck * 0.995,
+            'stop_loss': max(p1, p2) * 1.02,
+            'target': neck - (max(p1, p2) - neck),
+            'vol_confirm': vol_txt, 'vol_ratio': round(v2/v1, 2) if v1 > 0 else 0
+        })
+return results
+```
 
 # ─────────────────────────────────────────────────────────────
-# 5. 交易量分析
-# ─────────────────────────────────────────────────────────────
-def volume_analysis(df: pd.DataFrame) -> dict:
-    """交易量趨勢分析：量價關係、異常量能偵測"""
-    vol = df['Volume']
-    close = df['Close']
-    
-    # 20日均量
-    vol_ma20 = vol.rolling(20).mean()
-    # 5日均量
-    vol_ma5 = vol.rolling(5).mean()
-    
-    # 最新量能倍數
-    latest_vol = vol.iloc[-1]
-    avg_vol = vol_ma20.iloc[-1]
-    vol_ratio = latest_vol / avg_vol if avg_vol > 0 else 1
-    
-    # 量價背離偵測（價漲量縮 or 價跌量縮）
-    price_up = close.iloc[-1] > close.iloc[-5]
-    vol_up = vol.iloc[-1] > vol_ma20.iloc[-1]
-    
-    if price_up and vol_up:
-        signal = '量價齊揚 ✅ (健康上漲)'
-        signal_color = BULL_COLOR
-    elif price_up and not vol_up:
-        signal = '價漲量縮 ⚠️ (上漲動能不足)'
-        signal_color = WARNING_COLOR
-    elif not price_up and vol_up:
-        signal = '價跌量增 🚨 (恐慌性賣出)'
-        signal_color = BEAR_COLOR
-    else:
-        signal = '量價齊跌 ⚠️ (縮量整理)'
-        signal_color = NEUTRAL_COLOR
-    
-    # 尋找最近異常大量（超過均量2倍）
-    anomaly_idx = vol[vol > vol_ma20 * 2].index.tolist()
-    
-    return {
-        'vol_ma5': vol_ma5,
-        'vol_ma20': vol_ma20,
-        'vol_ratio': vol_ratio,
-        'signal': signal,
-        'signal_color': signal_color,
-        'anomaly_dates': anomaly_idx[-5:],  # 最近5次異常
-    }
 
+# 指標計算
 
 # ─────────────────────────────────────────────────────────────
-# 6. 技術指標
-# ─────────────────────────────────────────────────────────────
+
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    close = df['Close']
-    
-    # EMA
-    df['EMA20'] = close.ewm(span=20).mean()
-    df['EMA50'] = close.ewm(span=50).mean()
-    
-    # RSI
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    # MACD
-    ema12 = close.ewm(span=12).mean()
-    ema26 = close.ewm(span=26).mean()
-    df['MACD'] = ema12 - ema26
-    df['Signal'] = df['MACD'].ewm(span=9).mean()
-    df['Histogram'] = df['MACD'] - df['Signal']
-    
-    return df
-
+close = df[‘Close’]
+df[‘EMA20’] = close.ewm(span=20).mean()
+df[‘EMA50’] = close.ewm(span=50).mean()
+delta = close.diff()
+gain = delta.where(delta > 0, 0).rolling(14).mean()
+loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+df[‘RSI’] = 100 - (100 / (1 + gain / loss))
+ema12 = close.ewm(span=12).mean()
+ema26 = close.ewm(span=26).mean()
+df[‘MACD’] = ema12 - ema26
+df[‘Signal_Line’] = df[‘MACD’].ewm(span=9).mean()
+df[‘Histogram’] = df[‘MACD’] - df[‘Signal_Line’]
+return df
 
 # ─────────────────────────────────────────────────────────────
-# 7. 主繪圖函數
-# ─────────────────────────────────────────────────────────────
-def plot_analysis(symbol: str, df: pd.DataFrame, butterfly_patterns: list,
-                  wm_patterns: list, vol_info: dict):
-    
-    fig = plt.figure(figsize=(20, 14))
-    fig.patch.set_facecolor('#0d1117')
-    
-    gs = GridSpec(4, 2, figure=fig, hspace=0.08, wspace=0.3,
-                  height_ratios=[3, 1, 1, 1])
-    
-    ax_price = fig.add_subplot(gs[0, :])    # 主圖：價格
-    ax_vol = fig.add_subplot(gs[1, :])      # 交易量
-    ax_rsi = fig.add_subplot(gs[2, 0])     # RSI
-    ax_macd = fig.add_subplot(gs[2, 1])    # MACD
-    ax_info = fig.add_subplot(gs[3, :])    # 信號資訊
 
-    close = df['Close']
-    dates = df.index
-    x = np.arange(len(df))
-    
-    # ── 主圖：K線 + EMA ──
-    ax_price.set_facecolor('#0d1117')
-    
-    # 繪製陰陽線
-    for i in range(len(df)):
-        o, h, l, c = df['Open'].iloc[i], df['High'].iloc[i], df['Low'].iloc[i], df['Close'].iloc[i]
-        color = BULL_COLOR if c >= o else BEAR_COLOR
-        ax_price.plot([i, i], [l, h], color=color, linewidth=0.8, alpha=0.7)
-        ax_price.add_patch(plt.Rectangle((i - 0.3, min(o, c)), 0.6, abs(c - o),
-                                          facecolor=color, edgecolor=color, alpha=0.85))
-    
-    # EMA
-    valid_ema20 = df['EMA20'].dropna()
-    valid_ema50 = df['EMA50'].dropna()
-    ax_price.plot(x[-len(valid_ema20):], valid_ema20.values, color='#f0a500',
-                  linewidth=1.2, label='EMA20', alpha=0.8)
-    ax_price.plot(x[-len(valid_ema50):], valid_ema50.values, color='#58a6ff',
-                  linewidth=1.2, label='EMA50', alpha=0.8)
-    
-    # ── 蝴蝶形態繪製 ──
-    for bf in butterfly_patterns[-2:]:  # 只畫最近2個
-        pts = bf['points']
-        prices = bf['prices']
-        color = BULL_COLOR if bf['direction'] == 'bull' else BEAR_COLOR
-        
-        # 連線
-        ax_price.plot(pts, prices, color=color, linewidth=1.5,
-                      linestyle='--', alpha=0.7, zorder=5)
-        
-        # 標記點
-        for j, (pt, pr, lb) in enumerate(zip(pts, prices, bf['labels'])):
-            marker = 'v' if lb in ['A', 'C'] and bf['direction'] == 'bull' else '^'
-            if lb in ['X', 'D']:
-                marker = '*'
-            ax_price.scatter(pt, pr, color=color, s=80, zorder=10, marker='o')
-            ax_price.annotate(f'{lb}\n{pr:.1f}', (pt, pr),
-                              xytext=(0, 12 if j % 2 == 0 else -18),
-                              textcoords='offset points',
-                              fontsize=7, color=color, fontweight='bold',
-                              ha='center')
-        
-        # 進場線
-        ax_price.axhline(bf['entry'], color=color, linestyle=':', linewidth=1, alpha=0.6)
-        ax_price.axhline(bf['stop_loss'], color=BEAR_COLOR, linestyle=':', linewidth=0.8, alpha=0.5)
-        ax_price.axhline(bf['target1'], color=BULL_COLOR, linestyle=':', linewidth=0.8, alpha=0.5)
-    
-    # ── W/M 形態繪製 ──
-    for wm in wm_patterns[-2:]:
-        pts = wm['points']
-        prices = wm['prices']
-        color = BULL_COLOR if wm['direction'] == 'bull' else BEAR_COLOR
-        neck = wm['neck']
-        
-        # 頸線
-        ax_price.axhline(neck, color=color, linestyle='-.',
-                         linewidth=1.2, alpha=0.6)
-        ax_price.annotate(f"頸線 {neck:.1f}", (x[-1], neck),
-                          fontsize=7.5, color=color, ha='right',
-                          va='bottom', fontweight='bold')
-        
-        # 底/頂部標記
-        for pt, pr in zip(pts, prices):
-            ax_price.scatter(pt, pr, color=color, s=100, zorder=10,
-                             marker='^' if wm['direction'] == 'bull' else 'v')
-        
-        # 目標線
-        ax_price.axhline(wm['target'], color=WARNING_COLOR,
-                         linestyle=':', linewidth=1, alpha=0.5)
-    
-    ax_price.set_title(f'  {symbol}  左側交易分析儀  |  {dates[-1].date()}',
-                       fontsize=14, color='#e6edf3', fontweight='bold', pad=10, loc='left')
-    ax_price.legend(loc='upper left', framealpha=0.2, fontsize=8)
-    ax_price.set_xlim(-1, len(df) + 5)
-    ax_price.set_xticks([])
-    ax_price.grid(True, alpha=0.15)
-    
-    # ── 交易量圖 ──
-    ax_vol.set_facecolor('#0d1117')
-    vol_colors = [BULL_COLOR if df['Close'].iloc[i] >= df['Open'].iloc[i]
-                  else BEAR_COLOR for i in range(len(df))]
-    ax_vol.bar(x, df['Volume'].values, color=vol_colors, alpha=0.6, width=0.8)
-    ax_vol.plot(x[-len(vol_info['vol_ma5'].dropna()):],
-                vol_info['vol_ma5'].dropna().values, color='#f0a500',
-                linewidth=1, label='量MA5', alpha=0.85)
-    ax_vol.plot(x[-len(vol_info['vol_ma20'].dropna()):],
-                vol_info['vol_ma20'].dropna().values, color='#58a6ff',
-                linewidth=1, label='量MA20', alpha=0.85)
-    
-    # 異常量標記
-    for ad in vol_info['anomaly_dates']:
-        if ad in df.index:
-            ai = df.index.get_loc(ad)
-            ax_vol.annotate('異常量', (ai, df['Volume'].iloc[ai]),
-                            xytext=(0, 5), textcoords='offset points',
-                            fontsize=6, color=WARNING_COLOR, ha='center')
-    
-    ax_vol.set_ylabel('成交量', fontsize=8)
-    ax_vol.legend(loc='upper left', framealpha=0.2, fontsize=7)
-    ax_vol.set_xlim(-1, len(df) + 5)
-    ax_vol.set_xticks([])
-    ax_vol.grid(True, alpha=0.1)
-    
-    # ── RSI ──
-    ax_rsi.set_facecolor('#0d1117')
-    rsi = df['RSI'].dropna()
-    rsi_x = x[-len(rsi):]
-    ax_rsi.plot(rsi_x, rsi.values, color=NEUTRAL_COLOR, linewidth=1.2)
-    ax_rsi.axhline(70, color=BEAR_COLOR, linestyle='--', linewidth=0.8, alpha=0.7)
-    ax_rsi.axhline(30, color=BULL_COLOR, linestyle='--', linewidth=0.8, alpha=0.7)
-    ax_rsi.axhline(50, color='#8b949e', linestyle=':', linewidth=0.5, alpha=0.5)
-    ax_rsi.fill_between(rsi_x, rsi.values, 70,
-                        where=(rsi.values >= 70), alpha=0.2, color=BEAR_COLOR)
-    ax_rsi.fill_between(rsi_x, rsi.values, 30,
-                        where=(rsi.values <= 30), alpha=0.2, color=BULL_COLOR)
-    ax_rsi.set_ylabel('RSI', fontsize=8)
-    ax_rsi.set_ylim(0, 100)
-    ax_rsi.set_xlim(-1, len(df) + 5)
-    ax_rsi.set_xticks([])
-    ax_rsi.grid(True, alpha=0.1)
-    ax_rsi.annotate(f"RSI: {rsi.iloc[-1]:.1f}", (rsi_x[-1], rsi.iloc[-1]),
-                    xytext=(5, 0), textcoords='offset points',
-                    fontsize=8, color=NEUTRAL_COLOR, fontweight='bold')
-    
-    # ── MACD ──
-    ax_macd.set_facecolor('#0d1117')
-    macd = df['MACD'].dropna()
-    signal = df['Signal'].dropna()
-    hist = df['Histogram'].dropna()
-    macd_x = x[-len(macd):]
-    
-    hist_colors = [BULL_COLOR if v >= 0 else BEAR_COLOR for v in hist.values]
-    ax_macd.bar(macd_x[-len(hist):], hist.values, color=hist_colors, alpha=0.6, width=0.8)
-    ax_macd.plot(macd_x, macd.values, color='#f0a500', linewidth=1, label='MACD')
-    ax_macd.plot(macd_x[-len(signal):], signal.values, color=NEUTRAL_COLOR,
-                 linewidth=1, label='Signal')
-    ax_macd.axhline(0, color='#8b949e', linewidth=0.5)
-    ax_macd.set_ylabel('MACD', fontsize=8)
-    ax_macd.legend(loc='upper left', framealpha=0.2, fontsize=7)
-    ax_macd.set_xlim(-1, len(df) + 5)
-    ax_macd.set_xticks([])
-    ax_macd.grid(True, alpha=0.1)
-    
-    # ── 信號資訊區 ──
-    ax_info.set_facecolor('#161b22')
-    ax_info.set_xlim(0, 10)
-    ax_info.set_ylim(0, 1)
-    ax_info.axis('off')
-    
-    # 統計信號
-    bull_signals = [p for p in butterfly_patterns if p['direction'] == 'bull']
-    bear_signals = [p for p in butterfly_patterns if p['direction'] == 'bear']
-    bull_wm = [p for p in wm_patterns if p['direction'] == 'bull']
-    bear_wm = [p for p in wm_patterns if p['direction'] == 'bear']
-    
-    info_text = (
-        f"蝴蝶形態：看漲 {len(bull_signals)} 個  |  看跌 {len(bear_signals)} 個    "
-        f"W/M形態：W底 {len(bull_wm)} 個  |  M頭 {len(bear_wm)} 個    "
-        f"量能信號：{vol_info['signal']}    "
-        f"量比：{vol_info['vol_ratio']:.2f}x"
+# 量能分析
+
+# ─────────────────────────────────────────────────────────────
+
+def volume_analysis(df: pd.DataFrame) -> dict:
+vol = df[‘Volume’]
+close = df[‘Close’]
+vol_ma20 = vol.rolling(20).mean()
+vol_ma5 = vol.rolling(5).mean()
+latest_vol = float(vol.iloc[-1])
+avg_vol = float(vol_ma20.iloc[-1]) if not pd.isna(vol_ma20.iloc[-1]) else 1
+vol_ratio = latest_vol / avg_vol if avg_vol > 0 else 1
+price_up = float(close.iloc[-1]) > float(close.iloc[-5])
+vol_up = latest_vol > avg_vol
+if price_up and vol_up:
+signal, color = ‘量價齊揚 ✅ (健康上漲)’, ‘#3fb950’
+elif price_up and not vol_up:
+signal, color = ‘價漲量縮 ⚠️ (動能不足)’, ‘#d29922’
+elif not price_up and vol_up:
+signal, color = ‘價跌量增 🚨 (恐慌賣出)’, ‘#f85149’
+else:
+signal, color = ‘量價齊跌 ⚠️ (縮量整理)’, ‘#58a6ff’
+anomaly = vol[vol > vol_ma20 * 2].index.tolist()
+return {
+‘vol_ma5’: vol_ma5, ‘vol_ma20’: vol_ma20,
+‘vol_ratio’: vol_ratio, ‘signal’: signal,
+‘signal_color’: color, ‘anomaly_dates’: anomaly[-5:]
+}
+
+# ─────────────────────────────────────────────────────────────
+
+# Plotly 主圖
+
+# ─────────────────────────────────────────────────────────────
+
+def build_chart(df, butterflies, wm_patterns, vol_info, symbol):
+fig = make_subplots(
+rows=4, cols=1, shared_xaxes=True,
+row_heights=[0.50, 0.18, 0.16, 0.16],
+vertical_spacing=0.02,
+subplot_titles=(’’, ‘成交量’, ‘RSI’, ‘MACD’)
+)
+
+```
+dates = df.index
+close = df['Close'].values
+open_ = df['Open'].values
+high = df['High'].values
+low = df['Low'].values
+volume = df['Volume'].values
+
+# K線
+fig.add_trace(go.Candlestick(
+    x=dates, open=open_, high=high, low=low, close=close,
+    name='K線',
+    increasing_line_color='#3fb950', decreasing_line_color='#f85149',
+    increasing_fillcolor='#3fb950', decreasing_fillcolor='#f85149',
+), row=1, col=1)
+
+# EMA
+fig.add_trace(go.Scatter(x=dates, y=df['EMA20'], name='EMA20',
+                          line=dict(color='#f0a500', width=1.2), opacity=0.8), row=1, col=1)
+fig.add_trace(go.Scatter(x=dates, y=df['EMA50'], name='EMA50',
+                          line=dict(color='#58a6ff', width=1.2), opacity=0.8), row=1, col=1)
+
+# ── 蝴蝶形態標記 ──
+for bf in butterflies[-2:]:
+    pts = bf['points']
+    prices = bf['prices']
+    color = '#3fb950' if bf['direction'] == 'bull' else '#f85149'
+    bf_dates = [dates[p] for p in pts]
+
+    fig.add_trace(go.Scatter(
+        x=bf_dates, y=prices, mode='lines+markers+text',
+        name=bf['type'], line=dict(color=color, width=1.5, dash='dash'),
+        marker=dict(size=9, color=color, symbol='circle'),
+        text=bf['labels'], textposition='top center',
+        textfont=dict(size=10, color=color),
+    ), row=1, col=1)
+
+    # 進場/止損/目標水平線
+    for lvl, name, lc in [
+        (bf['entry'], '進場', color),
+        (bf['stop_loss'], '止損', '#f85149'),
+        (bf['target1'], '目標1', '#3fb950'),
+    ]:
+        fig.add_hline(y=lvl, line_dash='dot', line_color=lc,
+                      line_width=0.8, opacity=0.5, row=1, col=1,
+                      annotation_text=f"{name}: {lvl:.2f}",
+                      annotation_font_color=lc, annotation_font_size=9)
+
+# ── W底/M頭標記 ──
+for wm in wm_patterns[-2:]:
+    pts = wm['points']
+    prices = wm['prices']
+    color = '#3fb950' if wm['direction'] == 'bull' else '#f85149'
+    wm_dates = [dates[p] for p in pts]
+    marker_sym = 'triangle-up' if wm['direction'] == 'bull' else 'triangle-down'
+
+    fig.add_trace(go.Scatter(
+        x=wm_dates, y=prices, mode='markers',
+        name=wm['type'],
+        marker=dict(size=14, color=color, symbol=marker_sym),
+    ), row=1, col=1)
+
+    # 頸線
+    fig.add_hline(y=wm['neck'], line_dash='dashdot', line_color=color,
+                  line_width=1.2, opacity=0.7, row=1, col=1,
+                  annotation_text=f"頸線: {wm['neck']:.2f}",
+                  annotation_font_color=color, annotation_font_size=9,
+                  annotation_position='right')
+
+    # 目標線
+    fig.add_hline(y=wm['target'], line_dash='dot', line_color='#d29922',
+                  line_width=0.8, opacity=0.5, row=1, col=1,
+                  annotation_text=f"目標: {wm['target']:.2f}",
+                  annotation_font_color='#d29922', annotation_font_size=9,
+                  annotation_position='right')
+
+# ── 成交量 ──
+vol_colors = ['#3fb950' if close[i] >= open_[i] else '#f85149'
+              for i in range(len(df))]
+fig.add_trace(go.Bar(
+    x=dates, y=volume, name='成交量',
+    marker_color=vol_colors, opacity=0.65,
+), row=2, col=1)
+fig.add_trace(go.Scatter(
+    x=dates, y=vol_info['vol_ma5'], name='量MA5',
+    line=dict(color='#f0a500', width=1), opacity=0.85
+), row=2, col=1)
+fig.add_trace(go.Scatter(
+    x=dates, y=vol_info['vol_ma20'], name='量MA20',
+    line=dict(color='#58a6ff', width=1), opacity=0.85
+), row=2, col=1)
+
+# 異常量標記
+for ad in vol_info['anomaly_dates']:
+    if ad in df.index:
+        v = float(df.loc[ad, 'Volume'])
+        fig.add_trace(go.Scatter(
+            x=[ad], y=[v], mode='markers+text',
+            marker=dict(size=8, color='#d29922', symbol='star'),
+            text=['異常'], textposition='top center',
+            textfont=dict(size=8, color='#d29922'),
+            showlegend=False
+        ), row=2, col=1)
+
+# ── RSI ──
+fig.add_trace(go.Scatter(x=dates, y=df['RSI'], name='RSI',
+                          line=dict(color='#58a6ff', width=1.5)), row=3, col=1)
+fig.add_hline(y=70, line_dash='dash', line_color='#f85149', line_width=0.8, row=3, col=1)
+fig.add_hline(y=30, line_dash='dash', line_color='#3fb950', line_width=0.8, row=3, col=1)
+fig.add_hline(y=50, line_dash='dot', line_color='#8b949e', line_width=0.5, row=3, col=1)
+fig.add_hrect(y0=70, y1=100, fillcolor='#f85149', opacity=0.05, row=3, col=1)
+fig.add_hrect(y0=0, y1=30, fillcolor='#3fb950', opacity=0.05, row=3, col=1)
+
+# ── MACD ──
+hist_colors = ['#3fb950' if v >= 0 else '#f85149' for v in df['Histogram'].fillna(0)]
+fig.add_trace(go.Bar(x=dates, y=df['Histogram'], name='MACD柱',
+                      marker_color=hist_colors, opacity=0.7), row=4, col=1)
+fig.add_trace(go.Scatter(x=dates, y=df['MACD'], name='MACD',
+                          line=dict(color='#f0a500', width=1.2)), row=4, col=1)
+fig.add_trace(go.Scatter(x=dates, y=df['Signal_Line'], name='Signal',
+                          line=dict(color='#58a6ff', width=1)), row=4, col=1)
+fig.add_hline(y=0, line_color='#8b949e', line_width=0.5, row=4, col=1)
+
+# ── 樣式 ──
+fig.update_layout(
+    title=dict(text=f'🦋  {symbol}  左側交易分析儀', font=dict(size=16, color='#e6edf3')),
+    paper_bgcolor='#0d1117', plot_bgcolor='#0d1117',
+    font=dict(color='#8b949e', size=11),
+    height=820,
+    legend=dict(bgcolor='rgba(13,17,23,0.8)', bordercolor='#30363d',
+                borderwidth=1, font=dict(size=9)),
+    xaxis_rangeslider_visible=False,
+    margin=dict(l=60, r=60, t=60, b=40),
+)
+
+for i in range(1, 5):
+    fig.update_xaxes(
+        gridcolor='#21262d', showgrid=True,
+        zerolinecolor='#30363d', row=i, col=1
     )
-    ax_info.text(5, 0.6, info_text, fontsize=9, color='#e6edf3',
-                ha='center', va='center', fontweight='bold')
-    
-    # 最新價格
-    current_price = close.iloc[-1]
-    price_change = (close.iloc[-1] / close.iloc[-2] - 1) * 100
-    p_color = BULL_COLOR if price_change >= 0 else BEAR_COLOR
-    ax_info.text(5, 0.2,
-                 f"現價：{current_price:.4f}    "
-                 f"漲跌：{'▲' if price_change >= 0 else '▼'} {abs(price_change):.2f}%    "
-                 f"RSI：{df['RSI'].iloc[-1]:.1f}",
-                 fontsize=10, color=p_color, ha='center', va='center', fontweight='bold')
-    
-    # X軸日期（底部）
-    tick_positions = np.linspace(0, len(df)-1, min(10, len(df)), dtype=int)
-    ax_vol.set_xticks(tick_positions)
-    ax_vol.set_xticklabels([str(dates[i].date()) for i in tick_positions],
-                            rotation=30, fontsize=7)
-    
-    plt.savefig(f'{symbol.replace("-", "_")}_analysis.png',
-                dpi=150, bbox_inches='tight', facecolor='#0d1117')
-    print(f"\n💾 圖表已儲存：{symbol.replace('-', '_')}_analysis.png")
-    plt.show()
+    fig.update_yaxes(
+        gridcolor='#21262d', showgrid=True,
+        zerolinecolor='#30363d', row=i, col=1
+    )
 
+fig.update_yaxes(range=[0, 100], row=3, col=1)
+return fig
+```
 
 # ─────────────────────────────────────────────────────────────
-# 8. 主程式
+
+# Streamlit UI
+
 # ─────────────────────────────────────────────────────────────
-def analyze(symbol: str, period: str = "6mo", interval: str = "1d",
-            pivot_order: int = 5):
-    """
-    完整左側交易分析
-    
-    參數：
-    ─────────────────────────────
-    symbol      代碼範例：
-                  BTC/加密貨幣 → 'BTC-USD', 'ETH-USD'
-                  台股        → '2330.TW', '0050.TW'
-                  美股        → 'AAPL', 'TSLA', 'SPY'
-    period      時間週期：1mo / 3mo / 6mo / 1y / 2y
-    interval    K棒間隔：1d / 1h / 5m
-    pivot_order 極值靈敏度（越大越不靈敏）：3~10
-    """
-    
-    print("=" * 60)
-    print(f"  🔍 左側交易分析儀  |  {symbol}")
-    print("=" * 60)
-    
-    # 下載資料
-    df = get_data(symbol, period=period, interval=interval)
-    
-    # 計算指標
+
+def main():
+st.title(“🦋 左側交易分析儀”)
+st.caption(“支援 BTC / 加密貨幣 / 台股 / 美股　｜　蝴蝶形態 × W底M頭 × 量能分析”)
+
+```
+# ── 側邊欄 ──
+with st.sidebar:
+    st.markdown("### ⚙️ 分析設定")
+
+    # 快捷按鈕
+    st.markdown("**快捷選擇**")
+    cols = st.columns(2)
+    quick_symbol = None
+    for idx, (label, sym) in enumerate(QUICK_SYMBOLS.items()):
+        if cols[idx % 2].button(label, key=f"btn_{sym}", use_container_width=True):
+            quick_symbol = sym
+
+    st.markdown("---")
+    custom = st.text_input("自訂代碼", placeholder="e.g. 2330.TW / TSLA / BTC-USD")
+    symbol = custom.strip() if custom.strip() else (quick_symbol or "BTC-USD")
+
+    period = st.selectbox("時間週期", ["1mo", "3mo", "6mo", "1y", "2y"], index=2)
+    interval = st.selectbox("K棒間隔", ["1d", "1h", "15m", "5m"], index=0)
+    pivot_order = st.slider("極值靈敏度（越小越靈敏）", 3, 12, 5)
+
+    st.markdown("---")
+    run = st.button("🔍 開始分析", use_container_width=True, type="primary")
+    st.markdown("---")
+    st.markdown("""
+```
+
+**⚠️ 風險提示**
+
+- 本工具僅供技術分析參考
+- 左側交易屬**預判性進場**，形態完成需等突破確認
+- 槓桿交易風險極高，務必設定止損
+- 不構成任何投資建議
+  “””)
+  
+  # ── 主體 ──
+  
+  if run or quick_symbol:
+  if not symbol:
+  st.warning(“請輸入或選擇一個代碼”)
+  return
+  
+  ```
+    with st.spinner(f"📡 正在下載 {symbol} 資料..."):
+        df = get_data(symbol, period=period, interval=interval)
+  
+    if df.empty:
+        st.error(f"❌ 無法取得 {symbol} 資料，請確認代碼是否正確")
+        return
+  
     df = compute_indicators(df)
-    
-    # 偵測形態
-    print("\n🦋 蝴蝶形態偵測中...")
     butterflies = detect_butterfly(df, order=pivot_order)
-    
-    print(f"📊 W底/M頭形態偵測中...")
-    wm = detect_wm_patterns(df, order=pivot_order)
-    
-    print(f"📈 交易量分析中...")
+    wm_patterns = detect_wm_patterns(df, order=pivot_order)
     vol_info = volume_analysis(df)
-    
-    # 輸出文字報告
-    print("\n" + "─" * 60)
-    print("  📋 分析報告")
-    print("─" * 60)
-    
-    if butterflies:
-        print(f"\n【蝴蝶形態】共偵測 {len(butterflies)} 個")
-        for b in butterflies[-3:]:
-            print(f"\n  ● {b['type']}")
-            print(f"    進場價：{b['entry']:.4f}")
-            print(f"    止損價：{b['stop_loss']:.4f}")
-            print(f"    目標1：{b['target1']:.4f}")
-            print(f"    目標2：{b['target2']:.4f}")
-            print(f"    Fib比例：AB/XA={b['ratios']['AB/XA']:.3f}, "
-                  f"BC/AB={b['ratios']['BC/AB']:.3f}, "
-                  f"CD/BC={b['ratios']['CD/BC']:.3f}")
-    else:
-        print("\n【蝴蝶形態】未偵測到標準蝴蝶")
-    
-    if wm:
-        print(f"\n【W底/M頭形態】共偵測 {len(wm)} 個")
-        for w in wm[-3:]:
-            print(f"\n  ● {w['type']}")
-            print(f"    頸線：{w['neck']:.4f}")
-            print(f"    進場：{w['entry']:.4f}")
-            print(f"    止損：{w['stop_loss']:.4f}")
-            print(f"    目標：{w['target']:.4f}")
-            print(f"    量能：{w['vol_confirm']}（量比={w['vol_ratio']}）")
-    else:
-        print("\n【W底/M頭形態】未偵測到標準形態")
-    
-    print(f"\n【量能分析】")
-    print(f"  {vol_info['signal']}")
-    print(f"  當前量比：{vol_info['vol_ratio']:.2f}x（相對20日均量）")
-    if vol_info['anomaly_dates']:
-        print(f"  最近異常量日期：{[str(d.date()) for d in vol_info['anomaly_dates']]}")
-    
-    # 繪圖
-    plot_analysis(symbol, df, butterflies, wm, vol_info)
-    
-    return {'butterflies': butterflies, 'wm_patterns': wm, 'vol': vol_info, 'df': df}
+  
+    # ── 頂部指標卡 ──
+    current = float(df['Close'].iloc[-1])
+    prev = float(df['Close'].iloc[-2])
+    chg = (current / prev - 1) * 100
+    rsi = float(df['RSI'].iloc[-1]) if not pd.isna(df['RSI'].iloc[-1]) else 0
+    macd_val = float(df['MACD'].iloc[-1]) if not pd.isna(df['MACD'].iloc[-1]) else 0
+  
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("現價", f"{current:,.4f}", f"{chg:+.2f}%")
+    c2.metric("RSI(14)", f"{rsi:.1f}",
+              "超買 ⚠️" if rsi > 70 else ("超賣 ⚠️" if rsi < 30 else "正常"))
+    c3.metric("量比", f"{vol_info['vol_ratio']:.2f}x")
+    c4.metric("🦋蝴蝶形態", f"{len(butterflies)} 個",
+              f"看漲{sum(1 for b in butterflies if b['direction']=='bull')} / 看跌{sum(1 for b in butterflies if b['direction']=='bear')}")
+    c5.metric("W底/M頭", f"{len(wm_patterns)} 個",
+              f"W底{sum(1 for w in wm_patterns if w['direction']=='bull')} / M頭{sum(1 for w in wm_patterns if w['direction']=='bear')}")
+  
+    # ── 量能信號橫幅 ──
+    sig_class = ('signal-bull' if '齊揚' in vol_info['signal']
+                 else 'signal-bear' if '恐慌' in vol_info['signal']
+                 else 'signal-warn')
+    st.markdown(f'<div class="{sig_class}"><b>📊 量能信號：</b>{vol_info["signal"]}</div>',
+                unsafe_allow_html=True)
+  
+    # ── 主圖 ──
+    fig = build_chart(df, butterflies, wm_patterns, vol_info, symbol)
+    st.plotly_chart(fig, use_container_width=True)
+  
+    # ── 形態詳情 ──
+    col_a, col_b = st.columns(2)
+  
+    with col_a:
+        st.markdown("### 🦋 蝴蝶形態詳情")
+        if butterflies:
+            for bf in butterflies[-4:]:
+                color_class = 'signal-bull' if bf['direction'] == 'bull' else 'signal-bear'
+                st.markdown(f"""
+  ```
 
+<div class="{color_class}">
+<b>{bf['type']}</b><br>
+進場：<code>{bf['entry']:.4f}</code>　
+止損：<code>{bf['stop_loss']:.4f}</code>　
+目標1：<code>{bf['target1']:.4f}</code>　
+目標2：<code>{bf['target2']:.4f}</code><br>
+<small>Fib — AB/XA: {bf['ratios']['AB/XA']:.3f} | BC/AB: {bf['ratios']['BC/AB']:.3f} | CD/BC: {bf['ratios']['CD/BC']:.3f}</small>
+</div>""", unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="signal-info">目前未偵測到標準蝴蝶形態<br><small>可嘗試調整「極值靈敏度」或更長時間週期</small></div>',
+                            unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────────
-# 9. 使用範例
-# ─────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    
-    print("\n" + "═" * 60)
-    print("  左側交易分析儀  |  支援BTC & 股票")
-    print("═" * 60)
-    print("\n範例代碼：")
-    print("  BTC        → 'BTC-USD'")
-    print("  以太坊      → 'ETH-USD'")
-    print("  台積電      → '2330.TW'")
-    print("  台灣50     → '0050.TW'")
-    print("  Apple      → 'AAPL'")
-    print("  Tesla      → 'TSLA'")
-    
-    symbol = input("\n請輸入代碼（直接Enter使用BTC-USD）：").strip()
-    if not symbol:
-        symbol = "BTC-USD"
-    
-    period = input("時間週期 [1mo/3mo/6mo/1y] (Enter=6mo)：").strip() or "6mo"
-    interval = input("K棒間隔 [1d/1h] (Enter=1d)：").strip() or "1d"
-    result = analyze(symbol, period=period, interval=interval, pivot_order=5)
+```
+    with col_b:
+        st.markdown("### 📐 W底 / M頭形態詳情")
+        if wm_patterns:
+            for wm in wm_patterns[-4:]:
+                color_class = 'signal-bull' if wm['direction'] == 'bull' else 'signal-bear'
+                st.markdown(f"""
+```
+
+<div class="{color_class}">
+<b>{wm['type']}</b><br>
+頸線：<code>{wm['neck']:.4f}</code>　
+進場：<code>{wm['entry']:.4f}</code>　
+止損：<code>{wm['stop_loss']:.4f}</code>　
+目標：<code>{wm['target']:.4f}</code><br>
+<small>{wm['vol_confirm']}　量比：{wm['vol_ratio']}</small>
+</div>""", unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="signal-info">目前未偵測到W底/M頭形態<br><small>可嘗試調整「極值靈敏度」或更長時間週期</small></div>',
+                            unsafe_allow_html=True)
+
+```
+    # ── 資料表 ──
+    with st.expander("📄 查看原始資料（最近20筆）"):
+        show_df = df[['Open', 'High', 'Low', 'Close', 'Volume', 'EMA20', 'EMA50', 'RSI', 'MACD']].tail(20)
+        st.dataframe(show_df.style.format("{:.4f}"), use_container_width=True)
+
+else:
+    # 預設畫面
+    st.markdown("""
+```
+
+<div style="text-align:center; padding: 60px 0; color: #8b949e;">
+<h2>👈 從左側選擇標的開始分析</h2>
+<p>支援 BTC、ETH 等加密貨幣，台股（2330.TW），美股（AAPL、TSLA）</p>
+<br>
+<table style="margin: 0 auto; color: #8b949e; font-size:14px; border-collapse: collapse;">
+<tr><th style="padding:8px 20px; border-bottom: 1px solid #30363d;">功能</th><th style="padding:8px 20px; border-bottom: 1px solid #30363d;">說明</th></tr>
+<tr><td style="padding:6px 20px;">🦋 蝴蝶形態</td><td style="padding:6px 20px;">X-A-B-C-D Fibonacci 結構，自動判斷看漲/看跌</td></tr>
+<tr><td style="padding:6px 20px;">📐 W底 / M頭</td><td style="padding:6px 20px;">收斂/發散判斷 + 頸線突破進場點</td></tr>
+<tr><td style="padding:6px 20px;">📊 量能分析</td><td style="padding:6px 20px;">量比、量價背離、異常量偵測</td></tr>
+<tr><td style="padding:6px 20px;">📈 RSI / MACD</td><td style="padding:6px 20px;">超買超賣 + 趨勢動能確認</td></tr>
+</table>
+</div>
+""", unsafe_allow_html=True)
+
+if **name** == “**main**”:
+main()
